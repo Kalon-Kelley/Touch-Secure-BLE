@@ -14,12 +14,13 @@ int messageSize;
 uint8_t uid[3] = {0x12, 0x34, 0x56};
 
 const char* DEVICE_NAME = "SecureBLE";
-const int AUTH_TIMEOUT_DELAY_MS = 10000;
+const int AUTH_TIMEOUT_DELAY_MS = 100000;
 const int MAX_DEVICES = 10;
 String devices[MAX_DEVICES] = {};
 long time_last_read = -AUTH_TIMEOUT_DELAY_MS;
 int rolling_id = 0;
 boolean authenticated = false;
+boolean was_connected = false;
 boolean advertising = false;
 
 // IMU values
@@ -33,6 +34,7 @@ BLEFloatCharacteristic axCharacteristic("10A1", BLERead | BLENotify);
 // Authentication service
 BLEService authenticationService("AAAA");
 BLEIntCharacteristic keyCharacteristic("EEEE", BLEWrite);
+
 
 void setup() {
   Serial.begin(115200);
@@ -50,6 +52,7 @@ void setup() {
 
   nfc.setUid(uid);
   nfc.init();
+  nfc.setTagWriteable(false);
 
   BLE.setLocalName(DEVICE_NAME);
   BLE.setDeviceName(DEVICE_NAME);
@@ -62,15 +65,17 @@ void setup() {
   Serial.println("Setup Complete");
 }
 
+
 void loop() {
-  if (millis() - time_last_read > AUTH_TIMEOUT_DELAY_MS && !authenticated) {
+  if (was_connected || millis() - time_last_read > AUTH_TIMEOUT_DELAY_MS && !authenticated) {
     if (advertising) {
       BLE.stopAdvertise();
       advertising = false;
     }
+    if (was_connected) was_connected = false;
     rolling_id = random(999999);
     message = NdefMessage();
-    message.addTextRecord(String(rolling_id));
+    message.addTextRecord("{\"id\": " + String(rolling_id) + ", \"device\": \"" + DEVICE_NAME + "\"}");
     messageSize = message.getEncodedSize();
     Serial.print("Ndef encoded message size: ");
     Serial.println(messageSize);
@@ -90,29 +95,14 @@ void loop() {
   if (!central || !central.connected()) {
     return;
   }
+  was_connected = true;
   String central_address = central.address();
   Serial.print("\nStarting authentication process with device [");
   Serial.print(central_address);
   Serial.println("]");
-  while(central.connected() && !authenticated) {
-    if (millis() - time_last_read > AUTH_TIMEOUT_DELAY_MS) {
-      Serial.println(" -> Timeout... Disconnecting");
-      central.disconnect();
-      return;
-    }
-    if (keyCharacteristic.written()) {
-      Serial.println(keyCharacteristic.value());
-      authenticated = keyCharacteristic.value() == rolling_id;
-      if (!authenticated) {
-        Serial.println(" -> Invalid Key... Disconnecting");
-        central.disconnect();
-        return;
-      } else {
-        Serial.println(" -> Authenticated");
-      }
-    }
-    delay(100);
-  }
+  authenticated = authenticate(central);
+  if (!authenticated) central.disconnect();
+  Serial.println(authenticated ? " -> Authentication Successful" : " -> Authentication Failed");
 
   while (central.connected() && authenticated) {
     if (IMU.accelerationAvailable()) {
@@ -124,4 +114,15 @@ void loop() {
   authenticated = false;
   Serial.println(" -> Disconnected");
   delay(1000);
+}
+
+
+boolean authenticate(BLEDevice central) {
+  while(central.connected() && millis() - time_last_read < AUTH_TIMEOUT_DELAY_MS) {
+    if (keyCharacteristic.written() && keyCharacteristic.value() == rolling_id) {
+      return true;
+    }
+    delay(100);
+  }
+  return false;
 }

@@ -34,6 +34,7 @@ BLEFloatCharacteristic axCharacteristic("10A1", BLERead | BLENotify);
 // Authentication service
 BLEService authenticationService("AAAA");
 BLEIntCharacteristic keyCharacteristic("EEEE", BLEWrite);
+BLEStringCharacteristic testCharacteristic("CCCC", BLEWrite, 10);
 
 
 void setup() {
@@ -58,6 +59,7 @@ void setup() {
   BLE.setDeviceName(DEVICE_NAME);
   BLE.setAdvertisedService(authenticationService);
   authenticationService.addCharacteristic(keyCharacteristic);
+  authenticationService.addCharacteristic(testCharacteristic);
   imuService.addCharacteristic(axCharacteristic);
   BLE.addService(authenticationService);
   BLE.addService(imuService);
@@ -68,21 +70,7 @@ void setup() {
 
 void loop() {
   if (was_connected || millis() - time_last_read > AUTH_TIMEOUT_DELAY_MS && !authenticated) {
-    if (advertising) {
-      BLE.stopAdvertise();
-      advertising = false;
-    }
-    if (was_connected) was_connected = false;
-    rolling_id = random(999999);
-    message = NdefMessage();
-    message.addTextRecord("{\"id\": " + String(rolling_id) + ", \"device\": \"" + DEVICE_NAME + "\"}");
-    messageSize = message.getEncodedSize();
-    Serial.print("Ndef encoded message size: ");
-    Serial.println(messageSize);
-    message.encode(ndefBuf);
-    nfc.setNdefFile(ndefBuf, messageSize);
-
-    boolean emulated = nfc.emulate();
+    emulate_nfc_tag();
     Serial.println("Emulation interrupted, likely by a read");
     time_last_read = millis();
   }
@@ -90,7 +78,7 @@ void loop() {
     BLE.advertise();
     advertising = true;
   }
-  
+
   BLEDevice central = BLE.central();
   if (!central || !central.connected()) {
     return;
@@ -109,6 +97,9 @@ void loop() {
       IMU.readAcceleration(Ax, Ay, Az);
       axCharacteristic.writeValue(Ax);
     }
+    if (testCharacteristic.written()) {
+      Serial.println(testCharacteristic.value());
+    }
     delay(104);
   }
   authenticated = false;
@@ -117,10 +108,29 @@ void loop() {
 }
 
 
+void emulate_nfc_tag() {
+  if (advertising) {
+    BLE.stopAdvertise();
+    advertising = false;
+  }
+  was_connected = false;
+  rolling_id = random(999999);
+  message = NdefMessage();
+  message.addTextRecord("{\"id\": " + String(rolling_id) + ", \"device\": \"" + DEVICE_NAME + "\"}");
+  messageSize = message.getEncodedSize();
+  Serial.print("Ndef encoded message size: ");
+  Serial.println(messageSize);
+  message.encode(ndefBuf);
+  nfc.setNdefFile(ndefBuf, messageSize);
+
+  nfc.emulate();
+}
+
+
 boolean authenticate(BLEDevice central) {
   while(central.connected() && millis() - time_last_read < AUTH_TIMEOUT_DELAY_MS) {
-    if (keyCharacteristic.written() && keyCharacteristic.value() == rolling_id) {
-      return true;
+    if (keyCharacteristic.written()) {
+      return keyCharacteristic.value() == rolling_id;
     }
     delay(100);
   }

@@ -45,6 +45,7 @@ BLEFloatCharacteristic axCharacteristic("10A1", BLERead | BLENotify);
 // Authentication service
 BLEService authenticationService("AAAA");
 BLEStringCharacteristic authCharacteristic("EEEE", BLEWrite, 100);
+BLEByteCharacteristic modeCharacteristic("FFFF", BLEWrite);
 
 
 void setup() {
@@ -69,6 +70,7 @@ void setup() {
   BLE.setDeviceName(DEVICE_NAME);
   BLE.setAdvertisedService(authenticationService);
   authenticationService.addCharacteristic(authCharacteristic);
+  authenticationService.addCharacteristic(modeCharacteristic);
   imuService.addCharacteristic(axCharacteristic);
   BLE.addService(authenticationService);
   BLE.addService(imuService);
@@ -101,10 +103,27 @@ void loop() {
   if (!authenticated) central.disconnect();
   Serial.println(authenticated ? " -> Authentication Successful" : " -> Authentication Failed");
 
+  // Auth completed so this is just the loop while the device is connected
   while (central.connected() && authenticated) {
     if (IMU.accelerationAvailable()) {
       IMU.readAcceleration(Ax, Ay, Az);
       axCharacteristic.writeValue(Ax);
+    }
+    if (modeCharacteristic.written()) {
+      Serial.print(" -> Changing connection mode to ");
+      switch(modeCharacteristic.value()) {
+        case ANY:
+        Serial.println("ANY");
+        mode = ANY;
+        break;
+        case PREVIOUSLY_AUTHENTICATED:
+        Serial.println("PREVIOUSLY_AUTHENTICATED");
+        mode = PREVIOUSLY_AUTHENTICATED;
+        break;
+        default:
+        Serial.println("INVALID");
+        break;
+      }
     }
     delay(104);
   }

@@ -13,15 +13,26 @@ NdefMessage message;
 int messageSize;
 uint8_t uid[3] = {0x12, 0x34, 0x56};
 
+enum connection_mode {
+  ANY,
+  PREVIOUSLY_AUTHENTICATED
+};
+
+struct DeviceNode {
+  String name;
+  DeviceNode* next;
+};
+
 const char* DEVICE_NAME = "SecureBLE";
 const int AUTH_TIMEOUT_DELAY_MS = 100000;
 const int MAX_DEVICES = 10;
-String devices[MAX_DEVICES] = {};
-long time_last_read = -AUTH_TIMEOUT_DELAY_MS;
-int rolling_id = 0;
+DeviceNode* devices = nullptr;
+long time_last_read = 0;
+String rolling_id_hex = "";
 boolean authenticated = false;
-boolean was_connected = false;
+boolean was_connected = true;
 boolean advertising = false;
+connection_mode mode = ANY;
 
 // IMU values
 float Ax, Ay, Az;
@@ -33,8 +44,7 @@ BLEFloatCharacteristic axCharacteristic("10A1", BLERead | BLENotify);
 
 // Authentication service
 BLEService authenticationService("AAAA");
-BLEIntCharacteristic keyCharacteristic("EEEE", BLEWrite);
-BLEStringCharacteristic testCharacteristic("CCCC", BLEWrite, 10);
+BLEStringCharacteristic authCharacteristic("EEEE", BLEWrite, 100);
 
 
 void setup() {
@@ -58,8 +68,7 @@ void setup() {
   BLE.setLocalName(DEVICE_NAME);
   BLE.setDeviceName(DEVICE_NAME);
   BLE.setAdvertisedService(authenticationService);
-  authenticationService.addCharacteristic(keyCharacteristic);
-  authenticationService.addCharacteristic(testCharacteristic);
+  authenticationService.addCharacteristic(authCharacteristic);
   imuService.addCharacteristic(axCharacteristic);
   BLE.addService(authenticationService);
   BLE.addService(imuService);
@@ -97,9 +106,6 @@ void loop() {
       IMU.readAcceleration(Ax, Ay, Az);
       axCharacteristic.writeValue(Ax);
     }
-    if (testCharacteristic.written()) {
-      Serial.println(testCharacteristic.value());
-    }
     delay(104);
   }
   authenticated = false;
@@ -114,9 +120,13 @@ void emulate_nfc_tag() {
     advertising = false;
   }
   was_connected = false;
-  rolling_id = random(999999);
+  rolling_id_hex = String(random(999999), HEX);
+  while (rolling_id_hex.length() < 5) {
+    rolling_id_hex = "0" + rolling_id_hex;
+    Serial.println(rolling_id_hex);
+  }
   message = NdefMessage();
-  message.addTextRecord("{\"id\": " + String(rolling_id) + ", \"device\": \"" + DEVICE_NAME + "\"}");
+  message.addTextRecord("{\"id\": " + String(rolling_id_hex) + ", \"device\": \"" + DEVICE_NAME + "\"}");
   messageSize = message.getEncodedSize();
   Serial.print("Ndef encoded message size: ");
   Serial.println(messageSize);
@@ -129,10 +139,67 @@ void emulate_nfc_tag() {
 
 boolean authenticate(BLEDevice central) {
   while(central.connected() && millis() - time_last_read < AUTH_TIMEOUT_DELAY_MS) {
-    if (keyCharacteristic.written()) {
-      return keyCharacteristic.value() == rolling_id;
+    if (authCharacteristic.written()) {
+      String token = authCharacteristic.value();
+      String id = token.substring(0, 5);
+      String name = token.substring(6);
+      boolean known_device = false;
+
+      if (id != rolling_id_hex) return false;
+
+      DeviceNode* cur = devices;
+      DeviceNode* prev = nullptr;
+      int i = 0;
+      while (cur != nullptr && i < MAX_DEVICES) {
+        if (cur->name == name) {
+          Serial.println(" -> Device [" + name + "] previously connected");
+          known_device = true;
+          if (prev == nullptr) break;
+          prev->next = cur->next;
+          cur->next = devices;
+          devices = cur;
+          break;
+        }
+        prev = cur;
+        cur = cur->next;
+        i++;
+      }
+      switch(mode) {
+        case ANY:
+        if (!known_device) {
+          DeviceNode* new_device = new DeviceNode;
+          new_device->name = name;
+          add_new_device(new_device);
+        }
+        break;
+        case PREVIOUSLY_AUTHENTICATED:
+        if (!known_device) return false;
+        break;
+      }
+      return true;
     }
     delay(100);
   }
   return false;
+}
+
+void add_new_device(DeviceNode* new_device) {
+  Serial.println(" -> Adding new device to list [" + new_device->name + "]");
+  DeviceNode* prev = nullptr;
+  DeviceNode* cur = devices;
+  for (int i = 0; i < MAX_DEVICES; i++) {
+    if (cur == nullptr) {
+      new_device->next = devices;
+      devices = new_device;
+      return;
+    }
+    if (i == MAX_DEVICES-1) break;
+    prev = cur;
+    cur = cur->next;
+  }
+  Serial.println(" -> Had to evict [" + cur->name + "]");
+  delete cur;
+  prev->next = nullptr;
+  new_device->next = devices;
+  devices = new_device;
 }

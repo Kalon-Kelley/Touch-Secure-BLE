@@ -24,7 +24,7 @@ struct DeviceNode {
 };
 
 const char* DEVICE_NAME = "SecureBLE";
-const int AUTH_TIMEOUT_DELAY_MS = 100000;
+const int AUTH_TIMEOUT_DELAY_MS = 15000;
 const int MAX_DEVICES = 10;
 DeviceNode* devices = nullptr;
 long time_last_read = 0;
@@ -145,7 +145,7 @@ void emulate_nfc_tag() {
     Serial.println(rolling_id_hex);
   }
   message = NdefMessage();
-  message.addTextRecord("{\"id\": " + String(rolling_id_hex) + ", \"device\": \"" + DEVICE_NAME + "\"}");
+  message.addTextRecord("{\"id\": \"" + String(rolling_id_hex) + "\", \"device\": \"" + DEVICE_NAME + "\"}");
   messageSize = message.getEncodedSize();
   Serial.print("Ndef encoded message size: ");
   Serial.println(messageSize);
